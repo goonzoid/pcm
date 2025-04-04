@@ -1,6 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const target_endianness = builtin.cpu.arch.endian();
+comptime {
+    // we handle endianness correctly in some places, but not everywhere. it's safest to just stick
+    // to little endian systems for now until we have time to test on a big endian machine
+    std.debug.assert(target_endianness == .little);
+}
+
 pub const PCMInfo = struct {
     sample_rate: u32,
     bit_depth: u16,
@@ -32,17 +39,13 @@ pub fn readInfo(path: []const u8, err_info: ?[]u8) !PCMInfo {
     }
 }
 
-const native_endian = builtin.cpu.arch.endian();
-
 const Format = enum {
     wav,
     aiff,
 };
 
 const ChunkID = enum(u32) {
-    // TODO: these are reversed, because endianness
-    // we should probably do a comptime check
-    // specify versions for both big and little
+    // these are reversed, because endianness
     fmt = 0x20746d66, // " tmf"
     bext = 0x74786562, // "txeb"
     id3 = 0x20336469, // " 3di"
@@ -199,7 +202,7 @@ fn readCOMMChunk(f: std.fs.File) !PCMInfo {
         return PCMReadError.ShortRead;
     }
 
-    if (native_endian == std.builtin.Endian.little) {
+    if (target_endianness == std.builtin.Endian.little) {
         std.mem.reverse(u8, buf[0..2]);
         std.mem.reverse(u8, buf[6..8]);
         std.mem.reverse(u8, buf[8..18]);
