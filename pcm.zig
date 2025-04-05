@@ -126,26 +126,22 @@ fn getFormat(f: std.fs.File, err_info: []u8) !Format {
     }
 
     // TODO: there's probably a more elegant way to write the rest of this function
-    var format: Format = undefined;
-
     if (std.mem.eql(u8, buf[0..4], "RIFF")) {
         if (!std.mem.eql(u8, buf[8..12], "WAVE")) {
             @memcpy(err_info[0..4], buf[8..12]);
             return PCMReadError.InvalidRIFFChunkFormat;
         }
-        format = Format.wav;
+        return Format.wav;
     } else if (std.mem.eql(u8, buf[0..4], "FORM")) {
         if (!std.mem.eql(u8, buf[8..12], "AIFF")) {
             @memcpy(err_info[0..4], buf[8..12]);
             return PCMReadError.InvalidFORMChunkFormat;
         }
-        format = Format.aiff;
-    } else {
-        @memcpy(err_info[0..4], buf[0..4]);
-        return PCMReadError.InvalidChunkID;
+        return Format.aiff;
     }
 
-    return format;
+    @memcpy(err_info[0..4], buf[0..4]);
+    return PCMReadError.InvalidChunkID;
 }
 
 fn nextChunkInfo(f: std.fs.File, reverse_size_field: bool) !ChunkInfo {
