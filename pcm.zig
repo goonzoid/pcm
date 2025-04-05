@@ -84,12 +84,7 @@ fn readWavHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
             ChunkID.fake,
             ChunkID.junk,
             => try evenSeek(f, chunk_info.size),
-            ChunkID.COMM,
-            ChunkID.COMT,
-            ChunkID.INST,
-            ChunkID.MARK,
-            ChunkID.unknown,
-            => {
+            else => {
                 @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
                 return PCMReadError.InvalidChunkID;
             },
@@ -106,13 +101,7 @@ fn readAiffHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
             ChunkID.INST,
             ChunkID.MARK,
             => try evenSeek(f, chunk_info.size),
-            ChunkID.fmt,
-            ChunkID.bext,
-            ChunkID.id3,
-            ChunkID.fake,
-            ChunkID.junk,
-            ChunkID.unknown,
-            => {
+            else => {
                 @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
                 return PCMReadError.InvalidChunkID;
             },
