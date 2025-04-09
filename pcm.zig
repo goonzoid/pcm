@@ -16,6 +16,8 @@ pub const PCMInfo = struct {
     channels: u16,
 };
 
+const PCMAll = struct { PCMInfo, []f32 };
+
 pub const max_err_info_size = 4;
 const PCMReadError = error{
     ShortRead,
@@ -24,6 +26,8 @@ const PCMReadError = error{
     InvalidRIFFChunkFormat,
 };
 
+const ro_flag = std.fs.File.OpenFlags{ .mode = std.fs.File.OpenMode.read_only };
+
 // use max_err_info_size to ensure err_info will always have capacity for any error info
 pub fn readInfo(path: []const u8, err_info: ?[]u8) !PCMInfo {
     // void the err_info so we don't report nonsense if we have an unanticipated error
@@ -31,13 +35,28 @@ pub fn readInfo(path: []const u8, err_info: ?[]u8) !PCMInfo {
     // populate ei with a dummy buffer if no err_info was provided
     const ei: []u8 = err_info orelse @constCast(&std.mem.zeroes([max_err_info_size]u8));
 
-    const ro_flag = comptime std.fs.File.OpenFlags{ .mode = std.fs.File.OpenMode.read_only };
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
     switch (try getFormat(f, ei)) {
         Format.wav => return readWavHeader(f, ei),
         Format.aiff => return readAiffHeader(f, ei),
+    }
+}
+
+// use max_err_info_size to ensure err_info will always have capacity for any error info
+pub fn readAll(allocator: std.mem.Allocator, path: []const u8, err_info: ?[]u8) !PCMAll {
+    // void the err_info so we don't report nonsense if we have an unanticipated error
+    if (err_info) |ei| @memcpy(ei, "void");
+    // populate ei with a dummy buffer if no err_info was provided
+    const ei: []u8 = err_info orelse @constCast(&std.mem.zeroes([max_err_info_size]u8));
+
+    const f = try std.fs.cwd().openFile(path, ro_flag);
+    defer f.close();
+
+    switch (try getFormat(f, ei)) {
+        Format.wav => return readWavData(allocator, f, ei),
+        Format.aiff => @panic("not implemented yet"),
     }
 }
 
@@ -49,6 +68,7 @@ const Format = enum {
 const ChunkID = enum(u32) {
     // these are reversed, because endianness
     fmt = 0x20746d66, // " tmf"
+    data = 0x61746164, // "atad"
     bext = 0x74786562, // "txeb"
     id3 = 0x20336469, // " 3di"
     fake = 0x656b6146, // "ekaF"
@@ -118,6 +138,62 @@ fn readAiffHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
 fn evenSeek(f: std.fs.File, offset: u32) !void {
     const o: i64 = if (offset & 1 == 1) offset + 1 else offset;
     try f.seekBy(o);
+}
+
+fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PCMAll {
+    const info = try readWavHeader(f, err_info);
+    pcm_log.debug("readWavData: info: {}", .{info});
+
+    while (true) {
+        const chunk_info = try nextChunkInfo(f, false);
+        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
+
+        switch (chunk_info.id()) {
+            ChunkID.data => {
+                const raw_data = try allocator.alloc(u8, chunk_info.size);
+                const read = try f.readAll(raw_data);
+                if (read < chunk_info.size) {
+                    pcm_log.debug("readWavData: ShortRead: {d} bytes", .{read});
+                    return PCMReadError.ShortRead;
+                }
+
+                const bytes_per_sample = info.bit_depth / 8;
+                const sample_count = chunk_info.size / bytes_per_sample;
+                pcm_log.debug("transforming {d} frames / {d} bytes per frame", .{ sample_count, bytes_per_sample });
+
+                var iterator = std.mem.window(u8, raw_data, bytes_per_sample, bytes_per_sample);
+                var result = try allocator.alloc(f32, sample_count);
+
+                // TODO: handle null from iterator.next()
+                switch (info.bit_depth) {
+                    16 => {
+                        for (0..sample_count) |i| {
+                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i16, iterator.next().?));
+                            result[i] = s / 32768.0;
+                        }
+                    },
+                    24 => {
+                        for (0..sample_count) |i| {
+                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i24, iterator.next().?));
+                            result[i] = s / 8388608.0;
+                        }
+                    },
+                    32 => {
+                        // TODO: we can probably just use std.mem.bytesToValue or bytesAsValue on the whole slice
+                        for (0..sample_count) |i| {
+                            result[i] = std.mem.bytesToValue(f32, iterator.next().?);
+                        }
+                    },
+                    else => @panic("bit depth not supported"),
+                }
+
+                return .{ info, result };
+            },
+            else => {
+                try evenSeek(f, chunk_info.size);
+            },
+        }
+    }
 }
 
 // NOTE: each of these functions assumes that the file offset is in the correct
