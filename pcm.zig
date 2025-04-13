@@ -200,7 +200,7 @@ fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PC
 // place (e.g. 0 for the RIFF chunk, or at the start of a new chunk for nextChunkInfo)
 
 fn getFormat(f: std.fs.File, err_info: []u8) !Format {
-    const chunk_size: u32 = comptime 12;
+    const chunk_size: u32 = 12;
     var buf: [chunk_size]u8 = undefined;
     const read = try f.readAll(&buf);
     if (read < chunk_size) {
@@ -253,7 +253,7 @@ fn nextChunkInfo(f: std.fs.File, reverse_size_field: bool) !ChunkInfo {
 // nothing we care about at the moment will need those additional bytes.
 
 fn readFmtChunk(f: std.fs.File) !PCMInfo {
-    const chunk_size: usize = comptime 16;
+    const chunk_size: usize = 16;
     var buf: [chunk_size]u8 = undefined;
     const read = try f.readAll(&buf);
     if (read < chunk_size) {
@@ -268,7 +268,7 @@ fn readFmtChunk(f: std.fs.File) !PCMInfo {
 }
 
 fn readCOMMChunk(f: std.fs.File) !PCMInfo {
-    const chunk_size: usize = comptime 18;
+    const chunk_size: usize = 18;
     var buf: [chunk_size]u8 = undefined;
     const read = try f.readAll(&buf);
     if (read < chunk_size) {
