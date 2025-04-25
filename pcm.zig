@@ -151,6 +151,8 @@ fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PC
         switch (chunk_info.id()) {
             ChunkID.data => {
                 const raw_data = try allocator.alloc(u8, chunk_info.size);
+                defer allocator.free(raw_data);
+
                 const read = try f.readAll(raw_data);
                 if (read < chunk_info.size) {
                     pcm_log.debug("readWavData: ShortRead: {d} bytes", .{read});
