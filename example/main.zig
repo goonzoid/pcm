@@ -1,6 +1,8 @@
 const std = @import("std");
 const pcm = @import("pcm");
 
+const log = std.log.scoped(.example);
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -9,10 +11,11 @@ pub fn main() !void {
     var args = std.process.args();
     _ = args.skip();
     if (args.next()) |path| {
-        std.debug.print("{}\n", .{try pcm.readInfo(path, null)});
+        log.info("{}", .{try pcm.readInfo(path, null)});
         _, const data = try pcm.readAll(allocator, path, null);
-        std.debug.print("read {d} samples\n", .{data.len});
+        log.info("read {d} samples", .{data.len});
     } else {
-        std.debug.print("no audio file provided\n", .{});
+        log.err("no audio file provided\n", .{});
+        std.process.exit(1);
     }
 }

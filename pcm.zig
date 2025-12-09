@@ -142,7 +142,6 @@ fn evenSeek(f: std.fs.File, offset: u32) !void {
 
 fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PCMAll {
     const info = try readWavHeader(f, err_info);
-    pcm_log.debug("readWavData: info: {}", .{info});
 
     while (true) {
         const chunk_info = try nextChunkInfo(f, false);
