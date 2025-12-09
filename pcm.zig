@@ -1,6 +1,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// TODO: in the current version of zig (0.15.2) file readers use positional mode by default.
+// this appears not to make use of any buffer in the reader. it seems likely that we could
+// get a real performance benefit by switching to streaming mode, but we need to measure.
+
 const target_endianness = builtin.cpu.arch.endian();
 comptime {
     // we handle endianness correctly in some places, but not everywhere. it's safest to just stick
@@ -18,9 +22,9 @@ pub const PCMInfo = struct {
 
 const PCMAll = struct { PCMInfo, []f32 };
 
+// TODO: now that we have the new Writer interface, we can do better than this strange err_info API
 pub const max_err_info_size = 4;
 const PCMReadError = error{
-    ShortRead,
     InvalidChunkID,
     InvalidFORMChunkFormat,
     InvalidRIFFChunkFormat,
@@ -38,9 +42,12 @@ pub fn readInfo(path: []const u8, err_info: ?[]u8) !PCMInfo {
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
-    switch (try getFormat(f, ei)) {
-        Format.wav => return readWavHeader(f, ei),
-        Format.aiff => return readAiffHeader(f, ei),
+    var fr = f.reader(&.{});
+    const r = &fr.interface;
+
+    switch (try getFormat(r, ei)) {
+        Format.wav => return readWavHeader(r, ei),
+        Format.aiff => return readAiffHeader(r, ei),
     }
 }
 
@@ -54,8 +61,11 @@ pub fn readAll(allocator: std.mem.Allocator, path: []const u8, err_info: ?[]u8) 
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
-    switch (try getFormat(f, ei)) {
-        Format.wav => return readWavData(allocator, f, ei),
+    var fr = f.reader(&.{});
+    const r = &fr.interface;
+
+    switch (try getFormat(r, ei)) {
+        Format.wav => return readWavData(allocator, r, ei),
         Format.aiff => @panic("not implemented yet"),
     }
 }
@@ -96,17 +106,17 @@ const ChunkInfo = struct {
 // have the wrong reverse_size_field parameter on big endian systems... still
 // getting my head around that so need to test it out!
 
-fn readWavHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
+fn readWavHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
     while (true) {
-        const chunk_info = try nextChunkInfo(f, false);
+        const chunk_info = try nextChunkInfo(r, false);
         pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
         switch (chunk_info.id()) {
-            ChunkID.fmt => return readFmtChunk(f),
+            ChunkID.fmt => return readFmtChunk(r),
             ChunkID.bext,
             ChunkID.id3,
             ChunkID.fake,
             ChunkID.junk,
-            => try evenSeek(f, chunk_info.size),
+            => try evenSeek(r, chunk_info.size),
             else => {
                 @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
                 pcm_log.debug("readWavHeader: invalid chunk id: {s}", .{err_info[0..4]});
@@ -116,16 +126,16 @@ fn readWavHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
     }
 }
 
-fn readAiffHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
+fn readAiffHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
     while (true) {
-        const chunk_info = try nextChunkInfo(f, true);
+        const chunk_info = try nextChunkInfo(r, true);
         pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
         switch (chunk_info.id()) {
-            ChunkID.COMM => return readCOMMChunk(f),
+            ChunkID.COMM => return readCOMMChunk(r),
             ChunkID.COMT,
             ChunkID.INST,
             ChunkID.MARK,
-            => try evenSeek(f, chunk_info.size),
+            => try evenSeek(r, chunk_info.size),
             else => {
                 @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
                 pcm_log.debug("readAiffHeader: invalid chunk id: {s}", .{err_info[0..4]});
@@ -135,16 +145,16 @@ fn readAiffHeader(f: std.fs.File, err_info: []u8) !PCMInfo {
     }
 }
 
-fn evenSeek(f: std.fs.File, offset: u32) !void {
-    const o: i64 = if (offset & 1 == 1) offset + 1 else offset;
-    try f.seekBy(o);
+fn evenSeek(r: *std.Io.Reader, offset: u32) !void {
+    const o = if (offset & 1 == 1) offset + 1 else offset;
+    try r.discardAll(o);
 }
 
-fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PCMAll {
-    const info = try readWavHeader(f, err_info);
+fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, err_info: []u8) !PCMAll {
+    const info = try readWavHeader(r, err_info);
 
     while (true) {
-        const chunk_info = try nextChunkInfo(f, false);
+        const chunk_info = try nextChunkInfo(r, false);
         pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
 
         switch (chunk_info.id()) {
@@ -152,11 +162,7 @@ fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PC
                 const raw_data = try allocator.alloc(u8, chunk_info.size);
                 defer allocator.free(raw_data);
 
-                const read = try f.readAll(raw_data);
-                if (read < chunk_info.size) {
-                    pcm_log.debug("readWavData: ShortRead: {d} bytes", .{read});
-                    return PCMReadError.ShortRead;
-                }
+                try r.readSliceAll(raw_data);
 
                 const bytes_per_sample = info.bit_depth / 8;
                 const sample_count = chunk_info.size / bytes_per_sample;
@@ -191,7 +197,7 @@ fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PC
                 return .{ info, result };
             },
             else => {
-                try evenSeek(f, chunk_info.size);
+                try evenSeek(r, chunk_info.size);
             },
         }
     }
@@ -200,14 +206,9 @@ fn readWavData(allocator: std.mem.Allocator, f: std.fs.File, err_info: []u8) !PC
 // NOTE: each of these functions assumes that the file offset is in the correct
 // place (e.g. 0 for the RIFF chunk, or at the start of a new chunk for nextChunkInfo)
 
-fn getFormat(f: std.fs.File, err_info: []u8) !Format {
-    const chunk_size: u32 = 12;
-    var buf: [chunk_size]u8 = undefined;
-    const read = try f.readAll(&buf);
-    if (read < chunk_size) {
-        pcm_log.debug("getFormat: ShortRead: {d} bytes", .{read});
-        return PCMReadError.ShortRead;
-    }
+fn getFormat(r: *std.Io.Reader, err_info: []u8) !Format {
+    var buf: [12]u8 = undefined;
+    try r.readSliceAll(&buf);
 
     // TODO: there's probably a more elegant way to write the rest of this function
     if (std.mem.eql(u8, buf[0..4], "RIFF")) {
@@ -231,14 +232,10 @@ fn getFormat(f: std.fs.File, err_info: []u8) !Format {
     return PCMReadError.InvalidChunkID;
 }
 
-fn nextChunkInfo(f: std.fs.File, reverse_size_field: bool) !ChunkInfo {
+fn nextChunkInfo(r: *std.Io.Reader, reverse_size_field: bool) !ChunkInfo {
     const size = @sizeOf(ChunkInfo);
     var buf: [size]u8 = undefined;
-    const read = try f.readAll(&buf);
-    if (read < size) {
-        pcm_log.debug("nextChunkInfo: ShortRead: {d} bytes", .{read});
-        return PCMReadError.ShortRead;
-    }
+    try r.readSliceAll(&buf);
     if (reverse_size_field) std.mem.reverse(u8, buf[4..8]);
     return .{
         .id_int = std.mem.bytesToValue(u32, buf[0..4]),
@@ -253,14 +250,9 @@ fn nextChunkInfo(f: std.fs.File, reverse_size_field: bool) !ChunkInfo {
 // 16/18 bytes for wav/fmt and aiff/COMM respectively. if they are larger,
 // nothing we care about at the moment will need those additional bytes.
 
-fn readFmtChunk(f: std.fs.File) !PCMInfo {
-    const chunk_size: usize = 16;
-    var buf: [chunk_size]u8 = undefined;
-    const read = try f.readAll(&buf);
-    if (read < chunk_size) {
-        pcm_log.debug("readFmtChunk: ShortRead: {d} bytes", .{read});
-        return PCMReadError.ShortRead;
-    }
+fn readFmtChunk(r: *std.Io.Reader) !PCMInfo {
+    var buf: [16]u8 = undefined;
+    try r.readSliceAll(&buf);
     return .{
         .channels = std.mem.bytesToValue(u16, buf[2..4]),
         .sample_rate = std.mem.bytesToValue(u32, buf[4..8]),
@@ -268,14 +260,9 @@ fn readFmtChunk(f: std.fs.File) !PCMInfo {
     };
 }
 
-fn readCOMMChunk(f: std.fs.File) !PCMInfo {
-    const chunk_size: usize = 18;
-    var buf: [chunk_size]u8 = undefined;
-    const read = try f.readAll(&buf);
-    if (read < chunk_size) {
-        pcm_log.debug("readCOMMChunk: ShortRead: {d} bytes", .{read});
-        return PCMReadError.ShortRead;
-    }
+fn readCOMMChunk(r: *std.Io.Reader) !PCMInfo {
+    var buf: [18]u8 = undefined;
+    try r.readSliceAll(&buf);
 
     if (target_endianness == std.builtin.Endian.little) {
         std.mem.reverse(u8, buf[0..2]);
