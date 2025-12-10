@@ -22,6 +22,13 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(example_exe);
 
+    const check_exe = b.addExecutable(.{
+        .name = example_exe.name,
+        .root_module = example_exe.root_module,
+    });
+    const check = b.step("check", "Check if the example compiles");
+    check.dependOn(&check_exe.step);
+
     const run_cmd = b.addRunArtifact(example_exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
