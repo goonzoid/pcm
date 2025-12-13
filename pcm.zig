@@ -22,8 +22,6 @@ pub const PCMInfo = struct {
 
 const PCMAll = struct { PCMInfo, []f32 };
 
-// TODO: now that we have the new Writer interface, we can do better than this strange err_info API
-pub const max_err_info_size = 4;
 const PCMReadError = error{
     InvalidChunkID,
     InvalidFORMChunkFormat,
@@ -32,40 +30,34 @@ const PCMReadError = error{
 
 const ro_flag = std.fs.File.OpenFlags{ .mode = std.fs.File.OpenMode.read_only };
 
-// use max_err_info_size to ensure err_info will always have capacity for any error info
-pub fn readInfo(path: []const u8, err_info: ?[]u8) !PCMInfo {
-    // void the err_info so we don't report nonsense if we have an unanticipated error
-    if (err_info) |ei| @memcpy(ei, "void");
-    // populate ei with a dummy buffer if no err_info was provided
-    const ei: []u8 = err_info orelse @constCast(&std.mem.zeroes([max_err_info_size]u8));
-
+pub fn readInfo(path: []const u8, err_writer: ?*std.Io.Writer) !PCMInfo {
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
     var fr = f.reader(&.{});
     const r = &fr.interface;
 
-    switch (try getFormat(r, ei)) {
-        Format.wav => return readWavHeader(r, ei),
-        Format.aiff => return readAiffHeader(r, ei),
+    var discarding_writer = std.Io.Writer.Discarding.init(&.{});
+    const ew = err_writer orelse &discarding_writer.writer;
+
+    switch (try getFormat(r, ew)) {
+        Format.wav => return readWavHeader(r, ew),
+        Format.aiff => return readAiffHeader(r, ew),
     }
 }
 
-// use max_err_info_size to ensure err_info will always have capacity for any error info
-pub fn readAll(allocator: std.mem.Allocator, path: []const u8, err_info: ?[]u8) !PCMAll {
-    // void the err_info so we don't report nonsense if we have an unanticipated error
-    if (err_info) |ei| @memcpy(ei, "void");
-    // populate ei with a dummy buffer if no err_info was provided
-    const ei: []u8 = err_info orelse @constCast(&std.mem.zeroes([max_err_info_size]u8));
-
+pub fn readAll(allocator: std.mem.Allocator, path: []const u8, err_writer: ?*std.Io.Writer) !PCMAll {
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
     var fr = f.reader(&.{});
     const r = &fr.interface;
 
-    switch (try getFormat(r, ei)) {
-        Format.wav => return readWavData(allocator, r, ei),
+    var discarding_writer = std.Io.Writer.Discarding.init(&.{});
+    const ew = err_writer orelse &discarding_writer.writer;
+
+    switch (try getFormat(r, ew)) {
+        Format.wav => return readWavData(allocator, r, ew),
         Format.aiff => @panic("not implemented yet"),
     }
 }
@@ -94,11 +86,12 @@ const ChunkID = enum(u32) {
 // when parsing chunk info. It may or may not have been faster, but was
 // worse for debugging. Might be worth profiling at some point.
 const ChunkInfo = struct {
-    id_int: u32,
+    id: [4]u8,
     size: u32,
 
-    fn id(self: @This()) ChunkID {
-        return std.meta.intToEnum(ChunkID, self.id_int) catch ChunkID.unknown;
+    fn chunk_id(self: @This()) ChunkID {
+        const id_int: u32 = @bitCast(self.id);
+        return std.meta.intToEnum(ChunkID, id_int) catch ChunkID.unknown;
     }
 };
 
@@ -106,11 +99,11 @@ const ChunkInfo = struct {
 // have the wrong reverse_size_field parameter on big endian systems... still
 // getting my head around that so need to test it out!
 
-fn readWavHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
+fn readWavHeader(r: *std.Io.Reader, err_writer: *std.Io.Writer) !PCMInfo {
     while (true) {
         const chunk_info = try nextChunkInfo(r, false);
-        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
-        switch (chunk_info.id()) {
+        pcm_log.debug("chunk_info: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
+        switch (chunk_info.chunk_id()) {
             ChunkID.fmt => return readFmtChunk(r),
             ChunkID.bext,
             ChunkID.id3,
@@ -118,27 +111,29 @@ fn readWavHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
             ChunkID.junk,
             => try evenSeek(r, chunk_info.size),
             else => {
-                @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
-                pcm_log.debug("readWavHeader: invalid chunk id: {s}", .{err_info[0..4]});
+                pcm_log.debug("readWavHeader: invalid chunk id: {s}", .{chunk_info.id});
+                try err_writer.writeAll(&chunk_info.id);
+                try err_writer.flush();
                 return PCMReadError.InvalidChunkID;
             },
         }
     }
 }
 
-fn readAiffHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
+fn readAiffHeader(r: *std.Io.Reader, err_writer: *std.Io.Writer) !PCMInfo {
     while (true) {
         const chunk_info = try nextChunkInfo(r, true);
-        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
-        switch (chunk_info.id()) {
+        pcm_log.debug("chunk_info: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
+        switch (chunk_info.chunk_id()) {
             ChunkID.COMM => return readCOMMChunk(r),
             ChunkID.COMT,
             ChunkID.INST,
             ChunkID.MARK,
             => try evenSeek(r, chunk_info.size),
             else => {
-                @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
-                pcm_log.debug("readAiffHeader: invalid chunk id: {s}", .{err_info[0..4]});
+                pcm_log.debug("readAiffHeader: invalid chunk id: {s}", .{chunk_info.id});
+                try err_writer.writeAll(&chunk_info.id);
+                try err_writer.flush();
                 return PCMReadError.InvalidChunkID;
             },
         }
@@ -150,14 +145,14 @@ fn evenSeek(r: *std.Io.Reader, offset: u32) !void {
     try r.discardAll(o);
 }
 
-fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, err_info: []u8) !PCMAll {
-    const info = try readWavHeader(r, err_info);
+fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, err_writer: *std.Io.Writer) !PCMAll {
+    const info = try readWavHeader(r, err_writer);
 
     while (true) {
         const chunk_info = try nextChunkInfo(r, false);
-        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
+        pcm_log.debug("chunk_info: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
 
-        switch (chunk_info.id()) {
+        switch (chunk_info.chunk_id()) {
             ChunkID.data => {
                 const raw_data = try allocator.alloc(u8, chunk_info.size);
                 defer allocator.free(raw_data);
@@ -206,39 +201,41 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, err_info: []u8) 
 // NOTE: each of these functions assumes that the file offset is in the correct
 // place (e.g. 0 for the RIFF chunk, or at the start of a new chunk for nextChunkInfo)
 
-fn getFormat(r: *std.Io.Reader, err_info: []u8) !Format {
+fn getFormat(r: *std.Io.Reader, err_writer: *std.Io.Writer) !Format {
     var buf: [12]u8 = undefined;
     try r.readSliceAll(&buf);
 
     // TODO: there's probably a more elegant way to write the rest of this function
     if (std.mem.eql(u8, buf[0..4], "RIFF")) {
         if (!std.mem.eql(u8, buf[8..12], "WAVE")) {
-            @memcpy(err_info[0..4], buf[8..12]);
-            pcm_log.debug("getFormat: invalid RIFF chunk format: {s}", .{err_info[0..4]});
+            pcm_log.debug("getFormat: invalid RIFF chunk format: {s}", .{buf[8..12]});
+            try err_writer.writeAll(buf[8..12]);
+            try err_writer.flush();
             return PCMReadError.InvalidRIFFChunkFormat;
         }
         return Format.wav;
     } else if (std.mem.eql(u8, buf[0..4], "FORM")) {
         if (!std.mem.eql(u8, buf[8..12], "AIFF")) {
-            @memcpy(err_info[0..4], buf[8..12]);
-            pcm_log.debug("getFormat: invalid FORM chunk format: {s}", .{err_info[0..4]});
+            pcm_log.debug("getFormat: invalid FORM chunk format: {s}", .{buf[8..12]});
+            try err_writer.writeAll(buf[8..12]);
+            try err_writer.flush();
             return PCMReadError.InvalidFORMChunkFormat;
         }
         return Format.aiff;
     }
 
-    @memcpy(err_info[0..4], buf[0..4]);
-    pcm_log.debug("getFormat: invalid chunk id: {s}", .{err_info[0..4]});
+    pcm_log.debug("getFormat: invalid chunk id: {s}", .{buf[0..4]});
+    try err_writer.writeAll(buf[0..4]);
+    try err_writer.flush();
     return PCMReadError.InvalidChunkID;
 }
 
 fn nextChunkInfo(r: *std.Io.Reader, reverse_size_field: bool) !ChunkInfo {
-    const size = @sizeOf(ChunkInfo);
-    var buf: [size]u8 = undefined;
+    var buf: [@sizeOf(ChunkInfo)]u8 = undefined;
     try r.readSliceAll(&buf);
     if (reverse_size_field) std.mem.reverse(u8, buf[4..8]);
     return .{
-        .id_int = std.mem.bytesToValue(u32, buf[0..4]),
+        .id = buf[0..4].*,
         .size = std.mem.bytesToValue(u32, buf[4..8]),
     };
 }
