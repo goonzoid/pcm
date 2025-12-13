@@ -95,11 +95,12 @@ const ChunkID = enum(u32) {
 // when parsing chunk info. It may or may not have been faster, but was
 // worse for debugging. Might be worth profiling at some point.
 const ChunkInfo = struct {
-    id_int: u32,
+    id: [4]u8,
     size: u32,
 
-    fn id(self: @This()) ChunkID {
-        return std.meta.intToEnum(ChunkID, self.id_int) catch ChunkID.unknown;
+    fn ID(self: @This()) ChunkID {
+        const id_int: u32 = @bitCast(self.id);
+        return std.meta.intToEnum(ChunkID, id_int) catch ChunkID.unknown;
     }
 };
 
@@ -110,8 +111,8 @@ const ChunkInfo = struct {
 fn readWavHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
     while (true) {
         const chunk_info = try nextChunkInfo(r, false);
-        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
-        switch (chunk_info.id()) {
+        pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
+        switch (chunk_info.ID()) {
             ChunkID.fmt => return readFmtChunk(r),
             ChunkID.bext,
             ChunkID.id3,
@@ -119,7 +120,7 @@ fn readWavHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
             ChunkID.junk,
             => try evenSeek(r, chunk_info.size),
             else => {
-                @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
+                @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id));
                 pcm_log.debug("readWavHeader: invalid chunk id: {s}", .{err_info[0..4]});
                 return PCMReadError.InvalidChunkID;
             },
@@ -130,15 +131,15 @@ fn readWavHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
 fn readAiffHeader(r: *std.Io.Reader, err_info: []u8) !PCMInfo {
     while (true) {
         const chunk_info = try nextChunkInfo(r, true);
-        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
-        switch (chunk_info.id()) {
+        pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
+        switch (chunk_info.ID()) {
             ChunkID.COMM => return readCOMMChunk(r),
             ChunkID.COMT,
             ChunkID.INST,
             ChunkID.MARK,
             => try evenSeek(r, chunk_info.size),
             else => {
-                @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id_int));
+                @memcpy(err_info[0..4], &std.mem.toBytes(chunk_info.id));
                 pcm_log.debug("readAiffHeader: invalid chunk id: {s}", .{err_info[0..4]});
                 return PCMReadError.InvalidChunkID;
             },
@@ -156,9 +157,9 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, err_info: []u8) 
 
     while (true) {
         const chunk_info = try nextChunkInfo(r, false);
-        pcm_log.debug("chunk_info: {}, size: {d}", .{ chunk_info.id(), chunk_info.size });
+        pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
 
-        switch (chunk_info.id()) {
+        switch (chunk_info.ID()) {
             ChunkID.data => {
                 const raw_data = try allocator.alloc(u8, chunk_info.size);
                 defer allocator.free(raw_data);
@@ -239,7 +240,7 @@ fn nextChunkInfo(r: *std.Io.Reader, reverse_size_field: bool) !ChunkInfo {
     try r.readSliceAll(&buf);
     if (reverse_size_field) std.mem.reverse(u8, buf[4..8]);
     return .{
-        .id_int = std.mem.bytesToValue(u32, buf[0..4]),
+        .id = buf[0..4].*,
         .size = std.mem.bytesToValue(u32, buf[4..8]),
     };
 }
