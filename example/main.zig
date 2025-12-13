@@ -11,9 +11,19 @@ pub fn main() !void {
     var args = std.process.args();
     _ = args.skip();
     if (args.next()) |path| {
-        log.info("{}", .{try pcm.readInfo(path, null)});
-        _, const data = try pcm.readAll(allocator, path, null);
-        log.info("read {d} samples", .{data.len});
+        var diagnostics: pcm.Diagnostics = undefined;
+
+        const info = pcm.readInfo(path, &diagnostics) catch |err| {
+            log.err("readInfo: {any}: {s}", .{ err, diagnostics.chunk_id });
+            std.process.exit(1);
+        };
+        log.info("{any}", .{info});
+
+        _, const data = pcm.readAll(allocator, path, &diagnostics) catch |err| {
+            log.err("readAll: {any}: {s}", .{ err, diagnostics.chunk_id });
+            std.process.exit(1);
+        };
+        log.info("read {d} frames", .{data.len});
     } else {
         log.err("no audio file provided\n", .{});
         std.process.exit(1);
