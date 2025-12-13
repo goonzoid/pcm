@@ -2,8 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 // TODO: in the current version of zig (0.15.2) file readers use positional mode by default.
-// this appears not to make use of any buffer in the reader. it seems likely that we could
-// get a real performance benefit by switching to streaming mode, but we need to measure.
+// in this mode, calling readSliceAll and friends doesn't make use of the buffer, we need to
+// call fill ourselves to fill it. it seems likely that we could get a performance benefit by
+// providing a buffer and filling it, or switching to streaming mode, but we need to measure.
 
 const target_endianness = builtin.cpu.arch.endian();
 comptime {
