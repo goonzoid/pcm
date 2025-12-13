@@ -15,6 +15,7 @@ pub fn main() !void {
     _ = args.skip();
     if (args.next()) |path| {
         const info = pcm.readInfo(path, &errors.writer) catch |err| {
+            // TODO: we probably shouldn't call flush in pcm.zig - call it when you want to access the error info?
             log.err("readInfo: {any}: {s}", .{ err, errors.last_err_data });
             std.process.exit(1);
         };
