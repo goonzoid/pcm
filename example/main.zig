@@ -23,7 +23,7 @@ pub fn main() !void {
             log.err("readAll: {any}: {s}", .{ err, diagnostics.chunk_id });
             std.process.exit(1);
         };
-        log.info("read {d} frames", .{data.len});
+        log.info("read {d} samples", .{data.len});
     } else {
         log.err("no audio file provided\n", .{});
         std.process.exit(1);

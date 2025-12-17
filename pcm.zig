@@ -158,7 +158,7 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
 
                 const bytes_per_sample = info.bit_depth / 8;
                 const sample_count = chunk_info.size / bytes_per_sample;
-                pcm_log.debug("transforming {d} frames / {d} bytes per frame", .{ sample_count, bytes_per_sample });
+                pcm_log.debug("transforming {d} frames @ {d} bytes per sample", .{ sample_count / info.channels, bytes_per_sample });
 
                 var iterator = std.mem.window(u8, raw_data, bytes_per_sample, bytes_per_sample);
                 var result = try allocator.alloc(f32, sample_count);
