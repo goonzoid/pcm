@@ -15,15 +15,15 @@ comptime {
 
 const pcm_log = std.log.scoped(.pcm);
 
-pub const PCMInfo = struct {
+pub const Format = struct {
     sample_rate: u32,
     bit_depth: u16,
     channels: u16,
 };
 
-const PCMAll = struct { PCMInfo, []f32 };
+const AudioData = struct { Format, []f32 };
 
-const PCMReadError = error{
+const ReadError = error{
     InvalidChunkID,
     InvalidFORMChunkFormat,
     InvalidRIFFChunkFormat,
@@ -35,33 +35,33 @@ pub const Diagnostics = struct {
 
 const ro_flag = std.fs.File.OpenFlags{ .mode = std.fs.File.OpenMode.read_only };
 
-pub fn readInfo(path: []const u8, diagnostics: ?*Diagnostics) !PCMInfo {
+pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
     var fr = f.reader(&.{});
     const r = &fr.interface;
 
-    switch (try getFormat(r, diagnostics)) {
-        Format.wav => return readWavHeader(r, diagnostics),
-        Format.aiff => return readAiffHeader(r, diagnostics),
+    switch (try readFileFormat(r, diagnostics)) {
+        FileFormat.wav => return readWavHeader(r, diagnostics),
+        FileFormat.aiff => return readAiffHeader(r, diagnostics),
     }
 }
 
-pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Diagnostics) !PCMAll {
+pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Diagnostics) !AudioData {
     const f = try std.fs.cwd().openFile(path, ro_flag);
     defer f.close();
 
     var fr = f.reader(&.{});
     const r = &fr.interface;
 
-    switch (try getFormat(r, diagnostics)) {
-        Format.wav => return readWavData(allocator, r, diagnostics),
-        Format.aiff => @panic("not implemented yet"),
+    switch (try readFileFormat(r, diagnostics)) {
+        FileFormat.wav => return readWavData(allocator, r, diagnostics),
+        FileFormat.aiff => @panic("not implemented yet"),
     }
 }
 
-const Format = enum {
+const FileFormat = enum {
     wav,
     aiff,
 };
@@ -98,7 +98,7 @@ const ChunkInfo = struct {
 // have the wrong reverse_size_field parameter on big endian systems... still
 // getting my head around that so need to test it out!
 
-fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !PCMInfo {
+fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
     while (true) {
         const chunk_info = try nextChunkInfo(r, false);
         pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
@@ -112,13 +112,13 @@ fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !PCMInfo {
             else => {
                 pcm_log.debug("readWavHeader: invalid chunk id: {s}", .{chunk_info.id});
                 if (diagnostics) |d| d.chunk_id = chunk_info.id;
-                return PCMReadError.InvalidChunkID;
+                return ReadError.InvalidChunkID;
             },
         }
     }
 }
 
-fn readAiffHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !PCMInfo {
+fn readAiffHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
     while (true) {
         const chunk_info = try nextChunkInfo(r, true);
         pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
@@ -131,7 +131,7 @@ fn readAiffHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !PCMInfo {
             else => {
                 pcm_log.debug("readAiffHeader: invalid chunk id: {s}", .{chunk_info.id});
                 if (diagnostics) |d| d.chunk_id = chunk_info.id;
-                return PCMReadError.InvalidChunkID;
+                return ReadError.InvalidChunkID;
             },
         }
     }
@@ -142,7 +142,7 @@ fn evenSeek(r: *std.Io.Reader, offset: u32) !void {
     try r.discardAll(o);
 }
 
-fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*Diagnostics) !PCMAll {
+fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*Diagnostics) !AudioData {
     const info = try readWavHeader(r, diagnostics);
 
     while (true) {
@@ -198,7 +198,7 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
 // NOTE: each of these functions assumes that the file offset is in the correct
 // place (e.g. 0 for the RIFF chunk, or at the start of a new chunk for nextChunkInfo)
 
-fn getFormat(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
+fn readFileFormat(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !FileFormat {
     var buf: [12]u8 = undefined;
     try r.readSliceAll(&buf);
 
@@ -207,21 +207,21 @@ fn getFormat(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
         if (!std.mem.eql(u8, buf[8..12], "WAVE")) {
             pcm_log.debug("getFormat: invalid RIFF chunk format: {s}", .{buf[8..12]});
             if (diagnostics) |d| d.chunk_id = buf[8..12].*;
-            return PCMReadError.InvalidRIFFChunkFormat;
+            return ReadError.InvalidRIFFChunkFormat;
         }
-        return Format.wav;
+        return FileFormat.wav;
     } else if (std.mem.eql(u8, buf[0..4], "FORM")) {
         if (!std.mem.eql(u8, buf[8..12], "AIFF")) {
             pcm_log.debug("getFormat: invalid FORM chunk format: {s}", .{buf[8..12]});
             if (diagnostics) |d| d.chunk_id = buf[8..12].*;
-            return PCMReadError.InvalidFORMChunkFormat;
+            return ReadError.InvalidFORMChunkFormat;
         }
-        return Format.aiff;
+        return FileFormat.aiff;
     }
 
     pcm_log.debug("getFormat: invalid chunk id: {s}", .{buf[0..4]});
     if (diagnostics) |d| d.chunk_id = buf[0..4].*;
-    return PCMReadError.InvalidChunkID;
+    return ReadError.InvalidChunkID;
 }
 
 fn nextChunkInfo(r: *std.Io.Reader, reverse_size_field: bool) !ChunkInfo {
@@ -242,7 +242,7 @@ fn nextChunkInfo(r: *std.Io.Reader, reverse_size_field: bool) !ChunkInfo {
 // 16/18 bytes for wav/fmt and aiff/COMM respectively. if they are larger,
 // nothing we care about at the moment will need those additional bytes.
 
-fn readFmtChunk(r: *std.Io.Reader) !PCMInfo {
+fn readFmtChunk(r: *std.Io.Reader) !Format {
     var buf: [16]u8 = undefined;
     try r.readSliceAll(&buf);
     return .{
@@ -252,7 +252,7 @@ fn readFmtChunk(r: *std.Io.Reader) !PCMInfo {
     };
 }
 
-fn readCOMMChunk(r: *std.Io.Reader) !PCMInfo {
+fn readCOMMChunk(r: *std.Io.Reader) !Format {
     var buf: [18]u8 = undefined;
     try r.readSliceAll(&buf);
 

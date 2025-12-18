@@ -13,17 +13,17 @@ pub fn main() !void {
     if (args.next()) |path| {
         var diagnostics: pcm.Diagnostics = undefined;
 
-        const info = pcm.readInfo(path, &diagnostics) catch |err| {
-            log.err("readInfo: {any}: {s}", .{ err, diagnostics.chunk_id });
+        const format = pcm.readFormat(path, &diagnostics) catch |err| {
+            log.err("readFormat: {any}: {s}", .{ err, diagnostics.chunk_id });
             std.process.exit(1);
         };
-        log.info("{any}", .{info});
+        log.info("{any}", .{format});
 
-        _, const data = pcm.readAll(allocator, path, &diagnostics) catch |err| {
+        _, const samples = pcm.readAll(allocator, path, &diagnostics) catch |err| {
             log.err("readAll: {any}: {s}", .{ err, diagnostics.chunk_id });
             std.process.exit(1);
         };
-        log.info("read {d} samples", .{data.len});
+        log.info("read {d} samples", .{samples.len});
     } else {
         log.err("no audio file provided\n", .{});
         std.process.exit(1);
