@@ -16,6 +16,7 @@ comptime {
 const pcm_log = std.log.scoped(.pcm);
 
 pub const Format = struct {
+    file_type: FileType,
     sample_rate: u32,
     bit_depth: u16,
     channels: u16,
@@ -40,9 +41,9 @@ pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
     var fr = f.reader(&.{});
     const r = &fr.interface;
 
-    switch (try readFileFormat(r, diagnostics)) {
-        FileFormat.wav => return readWavHeader(r, diagnostics),
-        FileFormat.aiff => return readAiffHeader(r, diagnostics),
+    switch (try readFileType(r, diagnostics)) {
+        FileType.wav => return readWavHeader(r, diagnostics),
+        FileType.aiff => return readAiffHeader(r, diagnostics),
     }
 }
 
@@ -53,13 +54,13 @@ pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Di
     var fr = f.reader(&.{});
     const r = &fr.interface;
 
-    switch (try readFileFormat(r, diagnostics)) {
-        FileFormat.wav => return readWavData(allocator, r, diagnostics),
-        FileFormat.aiff => @panic("not implemented yet"),
+    switch (try readFileType(r, diagnostics)) {
+        FileType.wav => return readWavData(allocator, r, diagnostics),
+        FileType.aiff => @panic("not implemented yet"),
     }
 }
 
-const FileFormat = enum {
+const FileType = enum {
     wav,
     aiff,
 };
@@ -141,7 +142,7 @@ fn evenSeek(r: *std.Io.Reader, offset: u32) !void {
 }
 
 fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*Diagnostics) !AudioData {
-    const info = try readWavHeader(r, diagnostics);
+    const format = try readWavHeader(r, diagnostics);
 
     while (true) {
         const chunk_info = try nextChunkInfo(r, false);
@@ -154,15 +155,15 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
 
                 try r.readSliceAll(raw_data);
 
-                const bytes_per_sample = info.bit_depth / 8;
+                const bytes_per_sample = format.bit_depth / 8;
                 const sample_count = chunk_info.size / bytes_per_sample;
-                pcm_log.debug("transforming {d} frames @ {d} bytes per sample", .{ sample_count / info.channels, bytes_per_sample });
+                pcm_log.debug("transforming {d} frames @ {d} bytes per sample", .{ sample_count / format.channels, bytes_per_sample });
 
                 var iterator = std.mem.window(u8, raw_data, bytes_per_sample, bytes_per_sample);
                 var result = try allocator.alloc(f32, sample_count);
 
                 // TODO: handle null from iterator.next()
-                switch (info.bit_depth) {
+                switch (format.bit_depth) {
                     16 => {
                         for (0..sample_count) |i| {
                             const s: f32 = @floatFromInt(std.mem.bytesToValue(i16, iterator.next().?));
@@ -184,7 +185,7 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
                     else => @panic("bit depth not supported"),
                 }
 
-                return .{ info, result };
+                return .{ format, result };
             },
             else => {
                 try evenSeek(r, chunk_info.size);
@@ -196,7 +197,7 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
 // NOTE: each of these functions assumes that the file offset is in the correct
 // place (e.g. 0 for the RIFF chunk, or at the start of a new chunk for nextChunkInfo)
 
-fn readFileFormat(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !FileFormat {
+fn readFileType(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !FileType {
     var buf: [12]u8 = undefined;
     try r.readSliceAll(&buf);
 
@@ -207,14 +208,14 @@ fn readFileFormat(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !FileFormat {
             if (diagnostics) |d| d.chunk_id = buf[8..12].*;
             return ReadError.InvalidRIFFChunkFormat;
         }
-        return FileFormat.wav;
+        return FileType.wav;
     } else if (std.mem.eql(u8, buf[0..4], "FORM")) {
         if (!std.mem.eql(u8, buf[8..12], "AIFF")) {
             pcm_log.debug("getFormat: invalid FORM chunk format: {s}", .{buf[8..12]});
             if (diagnostics) |d| d.chunk_id = buf[8..12].*;
             return ReadError.InvalidFORMChunkFormat;
         }
-        return FileFormat.aiff;
+        return FileType.aiff;
     }
 
     pcm_log.debug("getFormat: invalid chunk id: {s}", .{buf[0..4]});
@@ -244,6 +245,7 @@ fn readFmtChunk(r: *std.Io.Reader) !Format {
     var buf: [16]u8 = undefined;
     try r.readSliceAll(&buf);
     return .{
+        .file_type = FileType.wav,
         .channels = std.mem.bytesToValue(u16, buf[2..4]),
         .sample_rate = std.mem.bytesToValue(u32, buf[4..8]),
         .bit_depth = std.mem.bytesToValue(u16, buf[14..16]),
@@ -261,6 +263,7 @@ fn readCOMMChunk(r: *std.Io.Reader) !Format {
     }
 
     return .{
+        .file_type = FileType.aiff,
         .channels = std.mem.bytesToValue(u16, buf[0..2]),
         .sample_rate = @intFromFloat(std.mem.bytesToValue(f80, buf[8..18])),
         .bit_depth = std.mem.bytesToValue(u16, buf[6..8]),
