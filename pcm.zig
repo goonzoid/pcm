@@ -33,10 +33,8 @@ pub const Diagnostics = struct {
     chunk_id: [4]u8,
 };
 
-const ro_flag = std.fs.File.OpenFlags{ .mode = std.fs.File.OpenMode.read_only };
-
 pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
-    const f = try std.fs.cwd().openFile(path, ro_flag);
+    const f = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{});
     defer f.close();
 
     var fr = f.reader(&.{});
@@ -49,7 +47,7 @@ pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
 }
 
 pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Diagnostics) !AudioData {
-    const f = try std.fs.cwd().openFile(path, ro_flag);
+    const f = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{});
     defer f.close();
 
     var fr = f.reader(&.{});
