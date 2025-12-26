@@ -25,7 +25,7 @@ pub fn main() !void {
         };
         log.info("read {d} samples", .{audio.samples.len});
 
-        const dir = if (std.fs.path.dirname(path)) |dir| dir else unreachable;
+        const dir = if (std.fs.path.dirname(path)) |dir| dir else ".";
         const output_path = try std.fs.path.join(allocator, &.{ dir, "pcm_example.wav" });
 
         try pcm.writeAll(output_path, audio.format, audio.samples);
