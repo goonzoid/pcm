@@ -157,9 +157,8 @@ fn readAiffHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
     }
 }
 
-fn evenSeek(r: *std.Io.Reader, offset: u32) !void {
-    const o = if (offset & 1 == 1) offset + 1 else offset;
-    try r.discardAll(o);
+fn evenSeek(r: *std.Io.Reader, offset: usize) !void {
+    try r.discardAll(offset + (offset & 1));
 }
 
 fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Audio {
