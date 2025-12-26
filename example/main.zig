@@ -19,17 +19,17 @@ pub fn main() !void {
         };
         log.info("{any}", .{format});
 
-        _, const samples = pcm.readAll(allocator, path, &diagnostics) catch |err| {
+        const audio = pcm.readAll(allocator, path, &diagnostics) catch |err| {
             log.err("readAll: {any}: {s}", .{ err, diagnostics.chunk_id });
             std.process.exit(1);
         };
-        log.info("read {d} samples", .{samples.len});
+        log.info("read {d} samples", .{audio.samples.len});
 
         const dir = if (std.fs.path.dirname(path)) |dir| dir else unreachable;
         const output_path = try std.fs.path.join(allocator, &.{ dir, "pcm_example.wav" });
 
-        try pcm.writeAll(output_path, format, samples);
-        log.info("wrote {d} samples to {s}", .{ samples.len, output_path });
+        try pcm.writeAll(output_path, audio.format, audio.samples);
+        log.info("wrote {d} samples to {s}", .{ audio.samples.len, output_path });
     } else {
         log.err("no audio file provided\n", .{});
         std.process.exit(1);

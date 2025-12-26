@@ -26,7 +26,15 @@ pub const Format = struct {
     channels: u16,
 };
 
-const AudioData = struct { Format, []f32 };
+pub const FileType = enum {
+    wav,
+    aiff,
+};
+
+pub const Audio = struct {
+    format: Format,
+    samples: []f32,
+};
 
 const ReadError = error{
     InvalidChunkID,
@@ -51,7 +59,7 @@ pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
     }
 }
 
-pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Diagnostics) !AudioData {
+pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Diagnostics) !Audio {
     const f = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{});
     defer f.close();
 
@@ -77,11 +85,6 @@ pub fn writeAll(path: []const u8, format: Format, samples: []const f32) !void {
         FileType.aiff => @panic("not implemented yet"),
     }
 }
-
-const FileType = enum {
-    wav,
-    aiff,
-};
 
 const ChunkID = enum(u32) {
     // these are reversed, because endianness
@@ -159,7 +162,7 @@ fn evenSeek(r: *std.Io.Reader, offset: u32) !void {
     try r.discardAll(o);
 }
 
-fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*Diagnostics) !AudioData {
+fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Audio {
     const format = try readWavHeader(r, diagnostics);
 
     while (true) {
@@ -203,7 +206,7 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
                     else => @panic("bit depth not supported"),
                 }
 
-                return .{ format, result };
+                return .{ .format = format, .samples = result };
             },
             else => {
                 try evenSeek(r, chunk_info.size);
