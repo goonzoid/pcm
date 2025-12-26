@@ -24,6 +24,12 @@ pub fn main() !void {
             std.process.exit(1);
         };
         log.info("read {d} samples", .{samples.len});
+
+        const dir = if (std.fs.path.dirname(path)) |dir| dir else unreachable;
+        const output_path = try std.fs.path.join(allocator, &.{ dir, "pcm_example.wav" });
+
+        try pcm.writeAll(output_path, format, samples);
+        log.info("wrote {d} samples to {s}", .{ samples.len, output_path });
     } else {
         log.err("no audio file provided\n", .{});
         std.process.exit(1);

@@ -15,6 +15,10 @@ comptime {
 
 const pcm_log = std.log.scoped(.pcm);
 
+// 2^(bits-1)
+const scale_factor_16 = 32768;
+const scale_factor_24 = 8388608;
+
 pub const Format = struct {
     file_type: FileType,
     sample_rate: u32,
@@ -56,6 +60,20 @@ pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Di
 
     switch (try readFileType(r, diagnostics)) {
         FileType.wav => return readWavData(allocator, r, diagnostics),
+        FileType.aiff => @panic("not implemented yet"),
+    }
+}
+
+pub fn writeAll(path: []const u8, format: Format, samples: []const f32) !void {
+    const f = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{});
+    defer f.close();
+
+    var buf: [4096]u8 = undefined;
+    var fw = f.writer(&buf);
+    const w = &fw.interface;
+
+    switch (format.file_type) {
+        FileType.wav => try writeWav(w, format, samples),
         FileType.aiff => @panic("not implemented yet"),
     }
 }
@@ -167,13 +185,13 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
                     16 => {
                         for (0..sample_count) |i| {
                             const s: f32 = @floatFromInt(std.mem.bytesToValue(i16, iterator.next().?));
-                            result[i] = s / 32768.0;
+                            result[i] = s / scale_factor_16;
                         }
                     },
                     24 => {
                         for (0..sample_count) |i| {
                             const s: f32 = @floatFromInt(std.mem.bytesToValue(i24, iterator.next().?));
-                            result[i] = s / 8388608.0;
+                            result[i] = s / scale_factor_24;
                         }
                     },
                     32 => {
@@ -192,6 +210,68 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
             },
         }
     }
+}
+
+fn writeWav(w: *std.Io.Writer, format: Format, samples: []const f32) !void {
+    const header_size = 4 + 24 + 8; // RIFF format + fmt chunk + data chunk header
+    const bytes_per_sample = format.bit_depth / 8;
+    const bytes_per_frame = format.channels * bytes_per_sample;
+    const bytes_per_second = format.sample_rate * bytes_per_frame;
+    const data_size = @as(u32, @intCast(samples.len)) * bytes_per_sample;
+    const total_size = header_size + data_size;
+    pcm_log.debug("writeWav: total size: {d} data size: {d}", .{ total_size, data_size });
+
+    try w.writeAll("RIFF");
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, total_size)));
+    try w.writeAll("WAVE");
+
+    try w.writeAll("fmt ");
+    // TODO: this may be incorrect for 32bit float
+    // see http://www-mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, 16)));
+
+    // wFormatTag (2 bytes): 1 for PCM, 3 for float
+    const audio_format: u16 = if (format.bit_depth < 32) 1 else 3; // this is janky
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, audio_format)));
+
+    // nChannels (2 bytes)
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, format.channels)));
+
+    // nSamplesPerSec (4 bytes): sample rate
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, format.sample_rate)));
+
+    // nAvgBytesPerSec (4 bytes): data rate (SampleRate * NumChannels * BitsPerSample / 8)
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, bytes_per_second)));
+
+    // nBlockAlign (2 bytes): size of one audio block (NumChannels * BitsPerSample / 8)
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, bytes_per_frame)));
+
+    // wBitsPerSample (2 bytes): bits per sample
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, format.bit_depth)));
+
+    try w.writeAll("data");
+    try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, data_size)));
+
+    for (samples) |sample| {
+        switch (format.bit_depth) {
+            16 => {
+                const int: i16 = @intFromFloat(sample * scale_factor_16);
+                const bytes: [2]u8 = @bitCast(int);
+                try w.writeAll(&bytes);
+            },
+            24 => {
+                const int: i24 = @intFromFloat(sample * scale_factor_24);
+                const bytes: [3]u8 = @bitCast(int);
+                try w.writeAll(&bytes);
+            },
+            32 => {
+                try w.writeAll(@ptrCast(&sample));
+            },
+            else => @panic("bit depth not supported"),
+        }
+    }
+
+    try w.flush();
 }
 
 // NOTE: each of these functions assumes that the file offset is in the correct
