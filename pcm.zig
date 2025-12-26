@@ -47,7 +47,7 @@ pub const Diagnostics = struct {
 };
 
 pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
-    const f = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{});
+    const f = try std.fs.cwd().openFile(path, .{});
     defer f.close();
 
     var fr = f.reader(&.{});
@@ -60,7 +60,7 @@ pub fn readFormat(path: []const u8, diagnostics: ?*Diagnostics) !Format {
 }
 
 pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Diagnostics) !Audio {
-    const f = try std.fs.cwd().openFile(path, std.fs.File.OpenFlags{});
+    const f = try std.fs.cwd().openFile(path, .{});
     defer f.close();
 
     var fr = f.reader(&.{});
@@ -73,7 +73,7 @@ pub fn readAll(allocator: std.mem.Allocator, path: []const u8, diagnostics: ?*Di
 }
 
 pub fn writeAll(path: []const u8, format: Format, samples: []const f32) !void {
-    const f = try std.fs.cwd().createFile(path, std.fs.File.CreateFlags{});
+    const f = try std.fs.cwd().createFile(path, .{});
     defer f.close();
 
     var buf: [4096]u8 = undefined;
