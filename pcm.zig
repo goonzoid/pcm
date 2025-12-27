@@ -120,7 +120,7 @@ const ChunkInfo = struct {
 
 fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
     while (true) {
-        const chunk_info = try nextChunkInfo(r, false);
+        const chunk_info = try nextChunkInfo(r, .wav);
         pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
         switch (chunk_info.ID()) {
             ChunkID.fmt => return readFmtChunk(r),
@@ -140,7 +140,7 @@ fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
 
 fn readAiffHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
     while (true) {
-        const chunk_info = try nextChunkInfo(r, true);
+        const chunk_info = try nextChunkInfo(r, .aiff);
         pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
         switch (chunk_info.ID()) {
             ChunkID.COMM => return readCOMMChunk(r),
@@ -165,7 +165,7 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
     const format = try readWavHeader(r, diagnostics);
 
     while (true) {
-        const chunk_info = try nextChunkInfo(r, false);
+        const chunk_info = try nextChunkInfo(r, .wav);
         pcm_log.debug("chunk id: {s}, size: {d}", .{ chunk_info.id, chunk_info.size });
 
         switch (chunk_info.ID()) {
@@ -305,14 +305,14 @@ fn readFileType(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !FileType {
     return ReadError.InvalidChunkID;
 }
 
-fn nextChunkInfo(r: *std.Io.Reader, reverse_size_field: bool) !ChunkInfo {
-    const size = @sizeOf(ChunkInfo);
-    var buf: [size]u8 = undefined;
+fn nextChunkInfo(r: *std.Io.Reader, file_type: FileType) !ChunkInfo {
+    var buf: [@sizeOf(ChunkInfo)]u8 = undefined;
     try r.readSliceAll(&buf);
-    if (reverse_size_field) std.mem.reverse(u8, buf[4..8]);
+    var size = std.mem.bytesToValue(u32, buf[4..8]);
+    if (file_type == .aiff) size = std.mem.bigToNative(u32, size);
     return .{
         .id = buf[0..4].*,
-        .size = std.mem.bytesToValue(u32, buf[4..8]),
+        .size = size,
     };
 }
 
