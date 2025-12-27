@@ -6,11 +6,11 @@ const builtin = @import("builtin");
 // call fill ourselves to fill it. it seems likely that we could get a performance benefit by
 // providing a buffer and filling it, or switching to streaming mode, but we need to measure.
 
-const target_endianness = builtin.cpu.arch.endian();
+const native_endian = builtin.cpu.arch.endian();
 comptime {
     // we handle endianness correctly in some places, but not everywhere. it's safest to just stick
     // to little endian systems for now until we have time to test on a big endian machine
-    std.debug.assert(target_endianness == .little);
+    std.debug.assert(native_endian == .little);
 }
 
 const pcm_log = std.log.scoped(.pcm);
@@ -338,7 +338,7 @@ fn readCOMMChunk(r: *std.Io.Reader) !Format {
     var buf: [18]u8 = undefined;
     try r.readSliceAll(&buf);
 
-    if (target_endianness == std.builtin.Endian.little) {
+    if (native_endian == std.builtin.Endian.little) {
         std.mem.reverse(u8, buf[0..2]);
         std.mem.reverse(u8, buf[6..8]);
         std.mem.reverse(u8, buf[8..18]);
