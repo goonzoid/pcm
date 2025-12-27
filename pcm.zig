@@ -250,20 +250,22 @@ fn writeWav(w: *std.Io.Writer, format: Format, samples: []const f32) !void {
     try w.writeAll("data");
     try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, data_size)));
 
-    for (samples) |sample| {
+    for (samples) |s| {
         switch (format.bit_depth) {
             16 => {
-                const int: i16 = @intFromFloat(sample * scale_factor_16);
+                const clamped = std.math.clamp(s * scale_factor_16, -scale_factor_16, scale_factor_16 - 1);
+                const int: i16 = @intFromFloat(clamped);
                 const bytes: [2]u8 = @bitCast(int);
                 try w.writeAll(&bytes);
             },
             24 => {
-                const int: i24 = @intFromFloat(sample * scale_factor_24);
+                const clamped = std.math.clamp(s * scale_factor_24, -scale_factor_24, scale_factor_24 - 1);
+                const int: i24 = @intFromFloat(clamped);
                 const bytes: [3]u8 = @bitCast(int);
                 try w.writeAll(&bytes);
             },
             32 => {
-                try w.writeAll(@ptrCast(&sample));
+                try w.writeAll(@ptrCast(&s));
             },
             else => @panic("bit depth not supported"),
         }
