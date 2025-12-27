@@ -178,26 +178,28 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
                 var result = try allocator.alloc(f32, sample_count);
                 errdefer allocator.free(result);
 
-                // TODO: handle null from iterator.next()
                 pcm_log.debug("transforming {d} frames @ {d} bytes per sample", .{ sample_count / format.channels, bytes_per_sample });
                 var iterator = std.mem.window(u8, raw_data, bytes_per_sample, bytes_per_sample);
                 switch (format.bit_depth) {
                     16 => {
                         for (0..sample_count) |i| {
-                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i16, iterator.next().?));
+                            const bytes = iterator.next() orelse return error.ReadError;
+                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i16, bytes));
                             result[i] = s / scale_factor_16;
                         }
                     },
                     24 => {
                         for (0..sample_count) |i| {
-                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i24, iterator.next().?));
+                            const bytes = iterator.next() orelse return error.ReadError;
+                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i24, bytes));
                             result[i] = s / scale_factor_24;
                         }
                     },
                     32 => {
                         // TODO: we can probably just use std.mem.bytesToValue or bytesAsValue on the whole slice
                         for (0..sample_count) |i| {
-                            result[i] = std.mem.bytesToValue(f32, iterator.next().?);
+                            const bytes = iterator.next() orelse return error.ReadError;
+                            result[i] = std.mem.bytesToValue(f32, bytes);
                         }
                     },
                     else => @panic("bit depth not supported"),
