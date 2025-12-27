@@ -36,10 +36,8 @@ pub const Audio = struct {
     samples: []f32,
 };
 
-const ReadError = error{
-    InvalidChunkID,
-    InvalidFORMChunkFormat,
-    InvalidRIFFChunkFormat,
+const Error = error{
+    ReadError,
 };
 
 pub const Diagnostics = struct {
@@ -132,7 +130,7 @@ fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
             else => {
                 pcm_log.debug("readWavHeader: invalid chunk id: {s}", .{chunk_info.id});
                 if (diagnostics) |d| d.chunk_id = chunk_info.id;
-                return ReadError.InvalidChunkID;
+                return error.ReadError;
             },
         }
     }
@@ -151,7 +149,7 @@ fn readAiffHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
             else => {
                 pcm_log.debug("readAiffHeader: invalid chunk id: {s}", .{chunk_info.id});
                 if (diagnostics) |d| d.chunk_id = chunk_info.id;
-                return ReadError.InvalidChunkID;
+                return error.ReadError;
             },
         }
     }
@@ -288,21 +286,21 @@ fn readFileType(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !FileType {
         if (!std.mem.eql(u8, buf[8..12], "WAVE")) {
             pcm_log.debug("getFormat: invalid RIFF chunk format: {s}", .{buf[8..12]});
             if (diagnostics) |d| d.chunk_id = buf[8..12].*;
-            return ReadError.InvalidRIFFChunkFormat;
+            return error.ReadError;
         }
         return FileType.wav;
     } else if (std.mem.eql(u8, buf[0..4], "FORM")) {
         if (!std.mem.eql(u8, buf[8..12], "AIFF")) {
             pcm_log.debug("getFormat: invalid FORM chunk format: {s}", .{buf[8..12]});
             if (diagnostics) |d| d.chunk_id = buf[8..12].*;
-            return ReadError.InvalidFORMChunkFormat;
+            return error.ReadError;
         }
         return FileType.aiff;
     }
 
     pcm_log.debug("getFormat: invalid chunk id: {s}", .{buf[0..4]});
     if (diagnostics) |d| d.chunk_id = buf[0..4].*;
-    return ReadError.InvalidChunkID;
+    return error.ReadError;
 }
 
 fn nextChunkInfo(r: *std.Io.Reader, file_type: FileType) !ChunkInfo {
