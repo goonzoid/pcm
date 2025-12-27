@@ -36,10 +36,6 @@ pub const Audio = struct {
     samples: []f32,
 };
 
-const Error = error{
-    ReadError,
-};
-
 pub const Diagnostics = struct {
     chunk_id: [4]u8,
 };
