@@ -215,6 +215,7 @@ fn writeWav(w: *std.Io.Writer, format: Format, samples: []const f32) !void {
     const bytes_per_sample = format.bit_depth / 8;
     const bytes_per_frame = format.channels * bytes_per_sample;
     const bytes_per_second = format.sample_rate * bytes_per_frame;
+    // TODO: handle u32 overflow here gracefully
     const data_size = @as(u32, @intCast(samples.len)) * bytes_per_sample;
     const total_size = header_size + data_size;
     pcm_log.debug("writeWav: total size: {d} data size: {d}", .{ total_size, data_size });
@@ -229,7 +230,8 @@ fn writeWav(w: *std.Io.Writer, format: Format, samples: []const f32) !void {
     try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, 16)));
 
     // wFormatTag (2 bytes): 1 for PCM, 3 for float
-    const audio_format: u16 = if (format.bit_depth < 32) 1 else 3; // this is janky
+    // TODO: do this properly when we support more bit depths
+    const audio_format: u16 = if (format.bit_depth < 32) 1 else 3;
     try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u16, audio_format)));
 
     // nChannels (2 bytes)
