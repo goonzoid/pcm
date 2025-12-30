@@ -108,10 +108,6 @@ const ChunkInfo = struct {
     }
 };
 
-// TODO: the calls to nextChunkInfo in readWavHeader and readAiffHeader may
-// have the wrong reverse_size_field parameter on big endian systems... still
-// getting my head around that so need to test it out!
-
 fn readWavHeader(r: *std.Io.Reader, diagnostics: ?*Diagnostics) !Format {
     while (true) {
         const chunk_info = try nextChunkInfo(r, .wav);
