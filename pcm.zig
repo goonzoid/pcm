@@ -229,8 +229,10 @@ fn writeWav(w: *std.Io.Writer, format: Format, samples: []const f32) !void {
     const bytes_per_sample = format.bit_depth / 8;
     const bytes_per_frame = format.channels * bytes_per_sample;
     const bytes_per_second = format.sample_rate * bytes_per_frame;
-    // TODO: handle u32 overflow here gracefully
-    const data_size = @as(u32, @intCast(samples.len)) * bytes_per_sample;
+    const data_size = std.math.cast(u32, @as(u64, samples.len) * bytes_per_sample) orelse {
+        std.log.err("cannot write {d} samples @ {d} bytes per sample to a regular wav", .{ samples.len, bytes_per_sample });
+        return error.AudioDataTooLarge;
+    };
     const total_size = header_size + data_size;
     pcm_log.debug("writeWav: total size: {d} data size: {d}", .{ total_size, data_size });
 
