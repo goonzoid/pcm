@@ -6,6 +6,10 @@ const builtin = @import("builtin");
 // call fill ourselves to fill it. it seems likely that we could get a performance benefit by
 // providing a buffer and filling it, or switching to streaming mode, but we need to measure.
 
+// TODO: we currently assume 32 bit depth means floating point samples, but this doesn't have
+// to be the case. We should start paying attention to the actual sample type from the header so
+// that we can support more valid format.
+
 const native_endian = builtin.cpu.arch.endian();
 comptime {
     // we handle endianness correctly in some places, but not everywhere. it's safest to just stick
@@ -14,10 +18,6 @@ comptime {
 }
 
 const pcm_log = std.log.scoped(.pcm);
-
-// 2^(bits-1)
-const scale_factor_16 = 32768;
-const scale_factor_24 = 8388608;
 
 pub const Format = struct {
     file_type: FileType,
@@ -160,49 +160,67 @@ fn readWavData(allocator: std.mem.Allocator, r: *std.Io.Reader, diagnostics: ?*D
 
         switch (chunk_info.ID()) {
             ChunkID.data => {
-                const raw_data = try allocator.alloc(u8, chunk_info.size);
-                defer allocator.free(raw_data);
-
-                try r.readSliceAll(raw_data);
-
-                const bytes_per_sample = format.bit_depth / 8;
-                const sample_count = chunk_info.size / bytes_per_sample;
-                var result = try allocator.alloc(f32, sample_count);
-                errdefer allocator.free(result);
-
-                pcm_log.debug("transforming {d} frames @ {d} bytes per sample", .{ sample_count / format.channels, bytes_per_sample });
-                var iterator = std.mem.window(u8, raw_data, bytes_per_sample, bytes_per_sample);
                 switch (format.bit_depth) {
-                    16 => {
-                        for (0..sample_count) |i| {
-                            const bytes = iterator.next() orelse return error.ReadError;
-                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i16, bytes));
-                            result[i] = s / scale_factor_16;
-                        }
-                    },
-                    24 => {
-                        for (0..sample_count) |i| {
-                            const bytes = iterator.next() orelse return error.ReadError;
-                            const s: f32 = @floatFromInt(std.mem.bytesToValue(i24, bytes));
-                            result[i] = s / scale_factor_24;
-                        }
-                    },
                     32 => {
-                        // TODO: we can probably just use std.mem.bytesToValue or bytesAsValue on the whole slice
-                        for (0..sample_count) |i| {
-                            const bytes = iterator.next() orelse return error.ReadError;
-                            result[i] = std.mem.bytesToValue(f32, bytes);
+                        const data = try allocator.alloc(u8, chunk_info.size);
+                        try r.readSliceAll(data);
+                        return .{ .format = format, .samples = @ptrCast(@alignCast(data)) };
+                    },
+                    16, 24 => {
+                        const bytes_per_sample = format.bit_depth / 8;
+                        const sample_count = chunk_info.size / bytes_per_sample;
+
+                        const raw_data = try allocator.alloc(u8, chunk_info.size);
+                        defer allocator.free(raw_data);
+                        try r.readSliceAll(raw_data);
+
+                        const result = try allocator.alloc(f32, sample_count);
+                        errdefer allocator.free(result);
+
+                        pcm_log.debug(
+                            "transforming {d} frames @ {d} bytes per sample",
+                            .{ sample_count / format.channels, bytes_per_sample },
+                        );
+
+                        var iterator = std.mem.window(u8, raw_data, bytes_per_sample, bytes_per_sample);
+
+                        // Ideally we wouldn't need this second switch, but reading arbitrary sized ints into a single
+                        // fixed size type is tricky. std.mem.readVarInt looked promising, but either has a bug, or
+                        // isn't intended for this use case (more likely).
+                        // e.g. readVarInt(i24, &.{0xFF, 0xFF}, .little) returns 65535 rather than -1
+                        // This is okay for now, but hopefully we can find a better solution when we start supporting
+                        // arbitrary bit depths.
+                        switch (format.bit_depth) {
+                            16 => {
+                                try scaleIntsToFloats(i16, &iterator, sample_count, scaleFactor(format.bit_depth), result);
+                            },
+                            24 => {
+                                try scaleIntsToFloats(i24, &iterator, sample_count, scaleFactor(format.bit_depth), result);
+                            },
+                            else => unreachable,
                         }
+
+                        return .{ .format = format, .samples = result };
                     },
                     else => @panic("bit depth not supported"),
                 }
-
-                return .{ .format = format, .samples = result };
             },
             else => {
                 try evenSeek(r, chunk_info.size);
             },
         }
+    }
+}
+
+fn scaleFactor(bit_depth: u16) f32 {
+    return @floatFromInt(std.math.pow(i32, 2, bit_depth - 1));
+}
+
+fn scaleIntsToFloats(comptime T: type, iterator: *std.mem.WindowIterator(u8), sample_count: usize, scale_factor: f32, result: []f32) !void {
+    for (0..sample_count) |i| {
+        const bytes = iterator.next() orelse return error.ReadError;
+        const s: f32 = @floatFromInt(std.mem.readVarInt(T, bytes, .little));
+        result[i] = s / scale_factor;
     }
 }
 
@@ -248,25 +266,30 @@ fn writeWav(w: *std.Io.Writer, format: Format, samples: []const f32) !void {
     try w.writeAll("data");
     try w.writeAll(&std.mem.toBytes(std.mem.nativeToLittle(u32, data_size)));
 
-    for (samples) |s| {
-        switch (format.bit_depth) {
-            16 => {
-                const clamped = std.math.clamp(s * scale_factor_16, -scale_factor_16, scale_factor_16 - 1);
+    const scale_factor = scaleFactor(format.bit_depth);
+    switch (format.bit_depth) {
+        16 => {
+            for (samples) |s| {
+                const clamped = std.math.clamp(s * scale_factor, -scale_factor, scale_factor - 1);
                 const int: i16 = @intFromFloat(clamped);
                 const bytes: [2]u8 = @bitCast(int);
                 try w.writeAll(&bytes);
-            },
-            24 => {
-                const clamped = std.math.clamp(s * scale_factor_24, -scale_factor_24, scale_factor_24 - 1);
+            }
+        },
+        24 => {
+            for (samples) |s| {
+                const clamped = std.math.clamp(s * scale_factor, -scale_factor, scale_factor - 1);
                 const int: i24 = @intFromFloat(clamped);
                 const bytes: [3]u8 = @bitCast(int);
                 try w.writeAll(&bytes);
-            },
-            32 => {
+            }
+        },
+        32 => {
+            for (samples) |s| {
                 try w.writeAll(@ptrCast(&s));
-            },
-            else => @panic("bit depth not supported"),
-        }
+            }
+        },
+        else => @panic("bit depth not supported"),
     }
 
     try w.flush();
